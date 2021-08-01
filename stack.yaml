@@ -3,5 +3,5 @@ extra-package-dbs: []
 packages:
 - '.'
 extra-deps:
-- language-c-0.6.1
+- language-c-0.7.2
 resolver: lts-8.5

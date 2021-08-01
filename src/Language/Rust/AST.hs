@@ -125,6 +125,7 @@ data ItemKind
     = Function [FunctionAttribute] String [(Mutable, Var, Type)] Type Block
     | Static Mutable Var Type Expr
     | Struct String [(String, Type)]
+    | Union String [(String, Type)]
     | Extern [ExternItem]
     | Use String
     | Enum String [Enumerator]
@@ -145,6 +146,10 @@ instance Pretty ItemKind where
         ] <> text ";"
     pPrint (Struct name fields) =
         text "struct" <+> text name <+> text "{" $+$
+        nest 4 (vcat [ text "pub" <+> text field <+> text ":" <+> pPrint ty <> text "," | (field, ty) <- fields ]) $+$
+        text "}"
+    pPrint (Union name fields) =
+        text "union" <+> text name <+> text "{" $+$
         nest 4 (vcat [ text "pub" <+> text field <+> text ":" <+> pPrint ty <> text "," | (field, ty) <- fields ]) $+$
         text "}"
     pPrint (Extern defs) = vcat

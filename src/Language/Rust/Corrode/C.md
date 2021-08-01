@@ -1268,6 +1268,9 @@ zeroed out.
             let missing = fields' `IntMap.difference` initials
             zeros <- mapM (zeroInitialize (Initializer Nothing IntMap.empty)) missing
             return (Initializer Nothing (IntMap.union initials zeros))
+        IsUnion _ ((_, fieldTy):_) -> do
+            fieldZero <- zeroInitialize (Initializer Nothing IntMap.empty) fieldTy
+            return (Initializer Nothing (IntMap.singleton 0 fieldZero))
         IsEnum{} -> unimplemented initial
         IsIncomplete _ -> badSource initial "initialization of incomplete type"
     zeroInitialize i _ = return i
@@ -1309,6 +1312,7 @@ based on whether it is declared `static`.
     (attrs, vis) <- case storage of
         Nothing -> return ([Rust.Attribute "no_mangle"], Rust.Public)
         Just (CStatic _) -> return ([], Rust.Private)
+        Just (CExtern _) -> return ([Rust.Attribute "no_mangle"], Rust.Public)
         Just s -> badSource s "storage class specifier for function"
 ```
 
@@ -2550,6 +2554,7 @@ interpretExpr _ expr@(CMember obj ident deref node) = do
     objTy <- completeType (resultType obj')
     fields <- case objTy of
         IsStruct _ fields -> return fields
+        IsUnion _ fields -> return fields
         _ -> badSource expr "member access of non-struct"
     let field = applyRenames ident
     ty <- case lookup field fields of
@@ -3375,6 +3380,7 @@ data CType
     | IsPtr Rust.Mutable CType
     | IsArray Rust.Mutable Int CType
     | IsStruct String [(String, CType)]
+    | IsUnion String [(String, CType)]
     | IsEnum String
     | IsIncomplete Ident
     deriving Show
@@ -3397,6 +3403,8 @@ instance Eq CType where
     IsPtr aMut aTy == IsPtr bMut bTy = aMut == bMut && aTy == bTy
     IsArray aMut _ aTy == IsArray bMut _ bTy = aMut == bMut && aTy == bTy
     IsStruct aName aFields == IsStruct bName bFields =
+        aName == bName && aFields == bFields
+    IsUnion aName aFields == IsUnion bName bFields =
         aName == bName && aFields == bFields
     IsEnum aName == IsEnum bName = aName == bName
     IsIncomplete aName == IsIncomplete bName = aName == bName
@@ -3428,6 +3436,7 @@ toRustType (IsArray _ size el) = Rust.TypeName ("[" ++ typename el ++ "; " ++ sh
     where
     typename (toRustType -> Rust.TypeName t) = t
 toRustType (IsStruct name _fields) = Rust.TypeName name
+toRustType (IsUnion name _fields) = Rust.TypeName name
 toRustType (IsEnum name) = Rust.TypeName name
 toRustType (IsIncomplete ident) = Rust.TypeName (identToString ident)
 ```
@@ -3687,13 +3696,48 @@ such unions to be passed around anywhere. So for now, this creates an
 incomplete type for each `union`.
 
 ```haskell
-    singleSpec [CSUType (CStruct CUnionTag mident _ _ _) node] = runOnce $ do
-        ident <- case mident of
-            Just ident -> return ident
-            Nothing -> do
-                name <- uniqueName "Union"
-                return (internalIdentAt (posOfNode node) name)
-        emitIncomplete Union ident
+    singleSpec [CSUType (CStruct CUnionTag (Just ident) Nothing _ _) _] = do
+        mty <- getTagIdent ident
+        return $ fromMaybe (emitIncomplete Union ident) mty
+
+    singleSpec [CSUType (CStruct CUnionTag mident (Just declarations) _ _) _] = do
+        deferredFields <- fmap concat $ forM declarations $ \ declaration -> case declaration of
+          CStaticAssert {} -> return []
+          CDecl spec decls _ -> do
+            (storage, base) <- baseTypeOf spec
+            case storage of
+                Just s -> badSource s "storage class specifier in union"
+                Nothing -> return ()
+            forM decls $ \ decl -> case decl of
+                (Just declr@(CDeclr (Just field) _ _ _ _), Nothing, Nothing) -> do
+                    deferred <- derivedDeferredTypeOf base declr []
+                    return (applyRenames field, deferred)
+                (_, Nothing, Just _size) -> do
+                    return ("<bitfield>", unimplemented declaration)
+                _ -> badSource declaration "field in union"
+        deferred <- runOnce $ do
+            (shouldEmit, name) <- case mident of
+                Just ident -> do
+                    rewrites <- lift (asks itemRewrites)
+                    case Map.lookup (Union, identToString ident) rewrites of
+                        Just renamed -> return (False, concatMap ("::" ++) renamed)
+                        Nothing -> return (True, identToString ident)
+                Nothing -> do
+                    name <- uniqueName "Union"
+                    return (True, name)
+            fields <- forM deferredFields $ \ (fieldName, deferred) -> do
+                itype <- deferred
+                return (fieldName, typeRep itype)
+            let attrs = [Rust.Attribute "derive(Copy)", Rust.Attribute "repr(C)"]
+            when shouldEmit $ emitItems
+                [ Rust.Item attrs Rust.Public (Rust.Union name [ (field, toRustType fieldTy) | (field, fieldTy) <- fields ])
+                , Rust.Item [] Rust.Private (Rust.CloneImpl (Rust.TypeName name))
+                ]
+            return (IsUnion name fields)
+        case mident of
+            Just ident -> addTagIdent ident deferred
+            Nothing -> return ()
+        return deferred
 ```
 
 Unlike `struct` references, an `enum` reference must name an `enum` that
