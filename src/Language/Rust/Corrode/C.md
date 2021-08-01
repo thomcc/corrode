@@ -26,6 +26,8 @@ useful data structures and control flow abstractions.
 ```haskell
 module Language.Rust.Corrode.C (interpretTranslationUnit) where
 
+-- import Prelude hiding ((<>))
+
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Trans.Class
@@ -43,7 +45,7 @@ import Language.C.Data.Ident
 import qualified Language.Rust.AST as Rust
 import Language.Rust.Corrode.CFG
 import Language.Rust.Corrode.CrateMap
-import Text.PrettyPrint.HughesPJClass hiding (Pretty)
+import Text.PrettyPrint.HughesPJClass hiding (Pretty, (<>))
 ```
 
 This translation proceeds in a syntax-directed way. That is, we just
@@ -140,6 +142,14 @@ Haskell typeclass (which is like a Rust trait) called
 which encapsulates this idea of combining pieces of output.
 
 ```haskell
+-- instance Semigroup Output where
+--   Output m1  Output m2 = Output (S.union m1 m2)
+instance Semigroup Output where
+    a <> b = Output
+        { outputItems = (outputItems a) <> (outputItems b)
+        , outputExterns = (outputExterns a) <> (outputExterns b)
+        , outputIncomplete = (outputIncomplete a) <> (outputIncomplete b)
+        }
 instance Monoid Output where
 ```
 
@@ -1001,6 +1011,11 @@ This motivates us to use the `Monoid` typeclass again to represent the
 operation for combining two initializers.
 
 ```haskell
+instance Semigroup Initializer where
+    (<>) _ b@(Initializer (Just _) _) = b
+    (<>) (Initializer m a) (Initializer Nothing b) =
+        Initializer m (IntMap.unionWith (<>) a b)
+
 instance Monoid Initializer where
 ```
 - The identity element in this case will be the empty initializer. This is
@@ -1652,9 +1667,8 @@ data OuterLabels = OuterLabels
 
 newtype SwitchCases = SwitchCases (IntMap.IntMap (Maybe Result))
 
-instance Monoid SwitchCases where
-    mempty = SwitchCases IntMap.empty
-    SwitchCases a `mappend` SwitchCases b = SwitchCases $
+instance Semigroup SwitchCases where
+    SwitchCases a <> SwitchCases b = SwitchCases $
         IntMap.unionWith (liftM2 eitherCase) a b
         where
         eitherCase lhs rhs = Result
@@ -1662,6 +1676,9 @@ instance Monoid SwitchCases where
             , resultMutable = Rust.Immutable
             , result = Rust.LOr (toBool lhs) (toBool rhs)
             }
+
+instance Monoid SwitchCases where
+    mempty = SwitchCases IntMap.empty
 ```
 
 Inside a function, we find C statements. Unlike C syntax which is oriented

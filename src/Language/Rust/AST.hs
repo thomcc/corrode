@@ -1,5 +1,5 @@
 module Language.Rust.AST where
-
+import Prelude hiding ((<>))
 import Data.Char
 import Numeric
 import Text.PrettyPrint.HughesPJClass

@@ -26,7 +26,7 @@ module Language.Rust.Corrode.CFG (
     removeEmptyBlocks, depthFirstOrder,
     prettyStructure, relooperRoot, structureCFG,
 ) where
-
+import Prelude hiding ((<>))
 import Control.Monad
 import Control.Monad.Trans.State
 import Data.Foldable
